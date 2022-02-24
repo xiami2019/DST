@@ -9,7 +9,7 @@ for domain in domains.keys():
 
 # extract slot value from db
 for domain, domain_file_name in domains.items():
-    file_name = domain_file_name + '_db.json'
+    file_name = './crosswoz/database/' + domain_file_name + '_db.json'
 
     db = json.loads(open(file_name, encoding='utf-8').read())
 
@@ -32,9 +32,9 @@ for domain, domain_file_name in domains.items():
                 ontology[domain][slot_name].add(slot_value)
 
 # extract slot value from source data
-train_data = json.loads(open('./../train.json', encoding='utf-8').read())
-val_data = json.loads(open('./../val.json', encoding='utf-8').read())
-test_data = json.loads(open('./../test.json', encoding='utf-8').read())
+train_data = json.loads(open('./crosswoz/train.json', encoding='utf-8').read())
+val_data = json.loads(open('./crosswoz/val.json', encoding='utf-8').read())
+test_data = json.loads(open('./crosswoz/test.json', encoding='utf-8').read())
 
 all_data = [train_data, val_data, test_data]
 
@@ -46,7 +46,10 @@ for dialog_data in all_data: # train、val、test；
                 if '-' in slot_name:
                     slot_name, slot_value = slot_name.split('-')
 
-                if slot_value != "" and slot_value != 'none':
+                if slot_value != "":
+                    if domain not in ontology:
+                        ontology[domain] = {}
+
                     if slot_name not in ontology[domain]:
                         ontology[domain][slot_name] = set()
 
@@ -56,7 +59,7 @@ for domain in ontology.keys():
     for slot_name in ontology[domain].keys():
         ontology[domain][slot_name] = list(ontology[domain][slot_name])
 
-with open('ontology.json', 'w') as f:
+with open('./crosswoz/database/ontology.json', 'w') as f:
     json.dump(ontology, f, ensure_ascii=False, indent=2)
 
 print("Creating ontology Over!")

@@ -190,6 +190,9 @@ class Database(object):
         return res
 
     def query_schema(self, field, args):
+        '''
+        args: cur_query_form
+        '''
         if not field in self.schema:
             raise Exception('Unknown field %s' % field)
         if not isinstance(args, dict):
@@ -291,4 +294,4 @@ if __name__ == '__main__':
         for dish in v['推荐菜']:
             dishes.setdefault(dish, 0)
             dishes[dish]+=1
-    # pprint(Counter(dishes))
+    pprint(Counter(dishes))

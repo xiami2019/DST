@@ -1,0 +1,5 @@
+CUDA_VISIBLE_DEVICES=5 python main_cw.py -run_type train -model_dir cpt_base_ururu_char_level_label_lr_1e-4_ep20 -ururu -backbone fnlp/cpt-base -max_to_keep_ckpt 20 -epochs 20
+# CUDA_VISIBLE_DEVICES=4 python main_cw.py -run_type train -model_dir cpt_large_ururu_char_level_label_lr_1e-4 -ururu -backbone fnlp/cpt-large -batch_size 4
+# CUDA_VISIBLE_DEVICES=6 python main_cw.py -run_type train -model_dir bart_base_ururu_char_level_label_lr_1e-4_ep20 -ururu -backbone fnlp/bart-base-chinese -max_to_keep_ckpt 20 -epochs 20
+# CUDA_VISIBLE_DEVICES=7 python main_cw.py -run_type train -model_dir bart_large_ururu_char_level_label_lr_1e-4 -ururu -backbone fnlp/bart-large-chinese
+# CUDA_VISIBLE_DEVICES=7 python main_cw.py -run_type train -model_dir bart_base_char_level_label_lr_1e-4_ep20 -backbone fnlp/bart-base-chinese -max_to_keep_ckpt 20 -epochs 20

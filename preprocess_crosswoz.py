@@ -1,16 +1,10 @@
 import os
 import json
+from textwrap import indent
+from tkinter import dialog
+from pathy import dataclass
 from tqdm import tqdm
 from collections import defaultdict
-
-
-def get_turn_domains(message):
-    domains = set()
-    for act in message['dialog_act']:
-        domain = act[1]
-        if domain != 'greet' and domain != 'thank' and domain != 'welcome' and domain != 'bye' and domain != 'reqmore':
-            domains.add(domain)
-    return list(domains)
 
 class PreprocessorDST(object):
     def __init__(self) -> None:
@@ -18,6 +12,48 @@ class PreprocessorDST(object):
         self.save_data_dir = os.path.join(self.data_dir, 'processed')
         if not os.path.exists(self.save_data_dir):
             os.makedirs(self.save_data_dir)
+
+    def split_data_with_domains(self, all_data):
+        '''
+        all_data is the original data of crosswoz
+        '''
+        mapping = {
+            '单领域': 'S', # Single-domain
+            '独立多领域': 'M', # Independent multi-domain
+            '独立多领域+交通': 'M+T', # Independent multi-domain + traffic
+            '不独立多领域': 'CM', # Cross multi-domain
+            '不独立多领域+交通': 'CM+T', # Cross multi-domain + traffic
+            }
+
+        domains = defaultdict(list)
+        for _, data in all_data.items():
+            for dialog_id, dialog in data.items():
+                domains[mapping[dialog['type']]].append(dialog_id)
+
+            save_path = os.path.join(self.save_data_dir, 'dial_by_domain.json')
+        with open(save_path, 'w') as fp:
+            json.dump(domains, fp, ensure_ascii=False, indent=4)
+
+
+    def extract_speical_tokens(self, all_data):
+        save_path = os.path.join(self.save_data_dir, 'special_tokens.json')
+        special_tokens = set()
+        for _, data in all_data.items():
+            for _, dialog in data.items():
+                for single_turn in dialog['log']:
+                    # sys_act = single_turn['sys_act'].split()
+                    belief_state = single_turn['belief_state'].split()
+                    # for token in sys_act:
+                    #     if token.startswith('[') and token.endswith(']'):
+                    #         special_tokens.add(token)
+
+                    for token in belief_state:
+                        if token.startswith('[') and token.endswith(']'):
+                            special_tokens.add(token)
+
+        special_tokens = list(special_tokens)
+        with open(save_path, 'w') as fp:
+            json.dump(special_tokens, fp, ensure_ascii=False, indent=4)      
     
     def process(self):
         with open("./crosswoz/train.json") as f:
@@ -26,6 +62,9 @@ class PreprocessorDST(object):
             val_data = json.load(f)
         with open("./crosswoz/test.json") as f:
             test_data = json.load(f)
+
+        all_data = {'train': train_data, 'val': val_data, 'test': test_data}
+        self.split_data_with_domains(all_data)
 
         self.extract_belief_states_labels()
 
@@ -36,6 +75,9 @@ class PreprocessorDST(object):
         train_data = self.generate_dst_data(train_data, 'train')
         val_data = self.generate_dst_data(val_data, 'val')
         test_data = self.generate_dst_data(test_data, 'test')
+
+        all_data = {'train': train_data, 'val': val_data, 'test': test_data}
+        self.extract_speical_tokens(all_data)
 
     def extract_belief_states_labels(self):
         self.all_states_labels = {}
@@ -54,14 +96,6 @@ class PreprocessorDST(object):
                 self.all_states_labels[dialog['dialogue_idx']] = []
                 for round in dialog['dialogue']:
                     self.all_states_labels[dialog['dialogue_idx']].append(round['belief_state'])
-
-    def check_if_inform_slots(self, slot_domain, slot_name, all_inform_slots):
-        if slot_domain not in all_inform_slots:
-            return False
-        elif slot_name not in all_inform_slots[slot_domain]:
-            return False
-        else:
-            return True
 
     def remove_space(self, text):
         new_text = ''
@@ -98,6 +132,20 @@ class PreprocessorDST(object):
 
         return result_span
 
+    def clean_slot_value(self, text):
+        slot_value_mapping = {
+            '高档下': '高档型',
+            '舒适': '舒适型',
+            '高档': '高档型',
+            '豪华': '豪华型',
+            '经济': '经济型',
+        }
+
+        if text in slot_value_mapping:
+            return slot_value_mapping[text]
+        
+        return text
+
     def convert_belief_states_to_span(self, belief_states):
         belief_states_span = ''
         belief_states_dict = defaultdict(list)
@@ -112,7 +160,11 @@ class PreprocessorDST(object):
             for slot_pair in belief_states_dict[domain]:
                 slot_name, slot_value = slot_pair
                 slot_value = self.remove_space(slot_value)
-                belief_states_span += '[' + slot_name + '] ' + slot_value + ' '
+                
+                # clean data
+                slot_value = self.clean_slot_value(slot_value)
+
+                belief_states_span += '[value_' + slot_name + '] ' + slot_value + ' '
         
         return belief_states_span
 
@@ -156,6 +208,8 @@ class PreprocessorDST(object):
 
         with open(save_path, 'w') as fp:
             json.dump(dst_data, fp, ensure_ascii=False, indent=4)
+
+        return dst_data
 
 
     def get_user_goal(self, goal):
@@ -240,13 +294,6 @@ class PreprocessorDST(object):
 
         return processed_data
 
-
 if __name__ == '__main__':
     preprocessor = PreprocessorDST()
     preprocessor.process()
-
-
-
-
-
-            

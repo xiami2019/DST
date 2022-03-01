@@ -77,7 +77,7 @@ class PreprocessorDST(object):
         test_data = self.generate_dst_data(test_data, 'test')
 
         all_data = {'train': train_data, 'val': val_data, 'test': test_data}
-        self.extract_speical_tokens(all_data)
+        # self.extract_speical_tokens(all_data)
 
     def extract_belief_states_labels(self):
         self.all_states_labels = {}

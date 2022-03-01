@@ -1,9 +1,9 @@
 import random
 import torch
 import numpy as np
-from config_cw import get_config
+from config import get_config
 from utils.io_utils import get_or_create_logger
-from runner_cw import CrossWOZRunner
+from runner import CrossWOZRunner
 
 logger = get_or_create_logger(__name__)
 

@@ -1,148 +1,24 @@
-"""
-   MTTOD: evaluator.py
-
-   Evaluate MultiWoZ Performance.
-
-   This code is referenced from thu-spmi's damd-multiwoz repository:
-   (https://github.com/thu-spmi/damd-multiwoz/blob/master/eval.py)
-
-   Copyright 2021 ETRI LIRS, Yohan Lee
-   Copyright 2019 Yichi Zhang
-
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
-
-       http://www.apache.org/licenses/LICENSE-2.0
-
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
-"""
-
+import pprint
 import os
-import math
-import argparse
-import logging
-
-from types import SimpleNamespace
-from collections import Counter, OrderedDict
-
-from nltk.util import ngrams
-
-from config import CONFIGURATION_FILE_NAME
-from reader import MultiWOZReader
-
-from utils import definitions
+from utils import definitions_cw
 from utils.io_utils import get_or_create_logger, load_json
-from utils.clean_dataset import clean_slot_values
-
 
 logger = get_or_create_logger(__name__)
 
-
-class BLEUScorer:
-    """
-    BLEU score calculator via GentScorer interface
-    it calculates the BLEU-4 by taking the entire corpus in
-    Calulate based multiple candidates against multiple references
-    """
-    def __init__(self):
-        pass
-
-    def score(self, parallel_corpus):
-        # containers
-        count = [0, 0, 0, 0]
-        clip_count = [0, 0, 0, 0]
-        r = 0
-        c = 0
-        weights = [0.25, 0.25, 0.25, 0.25]
-
-        # accumulate ngram statistics
-        for hyps, refs in parallel_corpus:
-            hyps = [hyp.split() for hyp in hyps]
-            refs = [ref.split() for ref in refs]
-            for hyp in hyps:
-
-                for i in range(4):
-                    # accumulate ngram counts
-                    hypcnts = Counter(ngrams(hyp, i + 1))
-                    cnt = sum(hypcnts.values())
-                    count[i] += cnt
-
-                    # compute clipped counts
-                    max_counts = {}
-                    for ref in refs:
-                        refcnts = Counter(ngrams(ref, i + 1))
-                        for ng in hypcnts:
-                            max_counts[ng] = max(
-                                max_counts.get(ng, 0), refcnts[ng])
-                    clipcnt = dict((ng, min(count, max_counts[ng]))
-                                   for ng, count in hypcnts.items())
-                    clip_count[i] += sum(clipcnt.values())
-
-                # accumulate r & c
-                bestmatch = [1000, 1000]
-                for ref in refs:
-                    if bestmatch[0] == 0:
-                        break
-                    diff = abs(len(ref) - len(hyp))
-                    if diff < bestmatch[0]:
-                        bestmatch[0] = diff
-                        bestmatch[1] = len(ref)
-                r += bestmatch[1]
-                c += len(hyp)
-
-        # computing bleu score
-        p0 = 1e-7
-        bp = 1 if c > r else math.exp(1 - float(r) / float(c))
-        p_ns = [float(clip_count[i]) / float(count[i] + p0) + p0
-                for i in range(4)]
-        s = math.fsum(w * math.log(p_n)
-                      for w, p_n in zip(weights, p_ns) if p_n)
-        bleu = bp * math.exp(s)
-        return bleu * 100
-
-
-class MultiWozEvaluator(object):
+class CrossWOZEvaluator(object):
     def __init__(self, reader, eval_data_type="test"):
         self.reader = reader
-        self.all_domains = definitions.ALL_DOMAINS
+        self.all_domains = definitions_cw.ALL_DOMAINS
 
         self.gold_data = load_json(os.path.join(
-            self.reader.data_dir, "{}_data.json".format(eval_data_type)))
+            self.reader.data_dir, "{}_mttod.json".format(eval_data_type)))
 
         self.eval_data_type = eval_data_type
 
-        self.bleu_scorer = BLEUScorer()
-
         self.all_info_slot = []
-        for d, s_list in definitions.INFORMABLE_SLOTS.items():
+        for d, s_list in definitions_cw.INFORMABLE_SLOTS.items():
             for s in s_list:
                 self.all_info_slot.append(d+'-'+s)
-
-        # only evaluate these slots for dialog success
-        self.requestables = ['phone', 'address', 'postcode', 'reference', 'id']
-
-    def bleu_metric(self, data, eval_dial_list=None):
-        gen, truth = [], []
-        for dial_id, dial in data.items():
-            if eval_dial_list and dial_id not in eval_dial_list:
-                continue
-            for turn in dial:
-                # excepoch <bos_resp>, <eos_resp>
-                gen.append(" ".join(turn['resp_gen'].split()[1:-1]))
-                truth.append(" ".join(turn['redx'].split()[1:-1]))
-
-        wrap_generated = [[_] for _ in gen]
-        wrap_truth = [[_] for _ in truth]
-        if gen and truth:
-            sc = self.bleu_scorer.score(zip(wrap_generated, wrap_truth))
-        else:
-            sc = 0.0
-        return sc
 
     def value_similar(self, a, b):
         return True if a == b else False
@@ -152,19 +28,13 @@ class MultiWozEvaluator(object):
             return True
         return False
 
-    def _bspn_to_dict(self, bspn, no_name=False, no_book=False):
+    def _bspn_to_dict(self, bspn):
         constraint_dict = self.reader.bspn_to_constraint_dict(bspn)
 
         constraint_dict_flat = {}
         for domain, cons in constraint_dict.items():
             for s, v in cons.items():
                 key = domain+'-'+s
-                if no_name and s == 'name':
-                    continue
-                if no_book:
-                    if s in ['people', 'stay'] or \
-                       key in ['hotel-day', 'restaurant-day', 'restaurant-time']:
-                        continue
                 constraint_dict_flat[key] = v
 
         return constraint_dict_flat
@@ -195,50 +65,32 @@ class MultiWozEvaluator(object):
         acc = len(self.all_info_slot) - fp - fn
         return tp, fp, fn, acc, list(set(false_slot))
 
-    def dialog_state_tracking_eval(self, dials,
-                                   eval_dial_list=None, no_name=False,
-                                   no_book=False, add_auxiliary_task=False):
+    def dialog_state_tracking_eval(self, dials):
         total_turn, joint_match = 0, 0
         total_tp, total_fp, total_fn, total_acc = 0, 0, 0, 0
         slot_appear_num, slot_correct_num = {}, {}
         dial_num = 0
         for dial_id in dials:
-            if eval_dial_list and dial_id not in eval_dial_list:
-                continue
             dial_num += 1
             dial = dials[dial_id]
             missed_jg_turn_id = []
             for turn_num, turn in enumerate(dial):
-                bspn_gen = turn["bspn_gen_with_span"] if add_auxiliary_task else turn["bspn_gen"]
-
-                gen_cons = self._bspn_to_dict(
-                    turn['bspn_gen'], no_name=no_name, no_book=no_book)
-                truth_cons = self._bspn_to_dict(
-                    turn['bspn'], no_name=no_name, no_book=no_book)
+                gen_cons = self._bspn_to_dict(turn['bspn_gen'])
+                truth_cons = self._bspn_to_dict(turn['bspn'])
 
                 if truth_cons == gen_cons:
                     joint_match += 1
                 else:
                     missed_jg_turn_id.append(str(turn['turn_num']))
 
-                if eval_dial_list is None:
-                    tp, fp, fn, acc, false_slots = self._constraint_compare(
-                        truth_cons, gen_cons, slot_appear_num, slot_correct_num)
-                else:
-                    tp, fp, fn, acc, false_slots = self._constraint_compare(
-                        truth_cons, gen_cons,)
+                tp, fp, fn, acc, false_slots = self._constraint_compare(
+                    truth_cons, gen_cons, slot_appear_num, slot_correct_num)
 
                 total_tp += tp
                 total_fp += fp
                 total_fn += fn
                 total_acc += acc
                 total_turn += 1
-                if not no_name and not no_book:
-                    turn['wrong_inform'] = '; '.join(false_slots)   # turn inform metric record
-
-            # dialog inform metric record
-            if not no_name and not no_book:
-                dial[0]['wrong_inform'] = ' '.join(missed_jg_turn_id)
 
         precision = total_tp / (total_tp + total_fp + 1e-10)
         recall = total_tp / (total_tp + total_fn + 1e-10)
@@ -640,50 +492,3 @@ class MultiWozEvaluator(object):
             data, eval_dial_list=eval_dial_list, add_auxiliary_task=add_auxiliary_task)
 
         return bleu, success, match
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Argument for evaluation")
-
-    parser.add_argument("-data", type=str, required=True)
-    parser.add_argument("-data_type", type=str, default="test", choices=["dev", "test"])
-    parser.add_argument("-excluded_domains", type=str, nargs="+")
-
-    args = parser.parse_args()
-
-    cfg_path = os.path.join(
-        os.path.dirname(os.path.dirname(args.data)), CONFIGURATION_FILE_NAME)
-
-    cfg = SimpleNamespace(**load_json(cfg_path))
-
-    data = load_json(args.data)
-
-    dial_by_domain = load_json("data/MultiWOZ_2.1/dial_by_domain.json")
-
-    eval_dial_list = None
-    if args.excluded_domains is not None:
-        eval_dial_list = []
-        for domains, dial_ids in dial_by_domain.items():
-            domain_list = domains.split("-")
-
-            if len(set(domain_list) & set(args.excluded_domains)) == 0:
-                eval_dial_list.extend(dial_ids)
-
-    reader = MultiWOZReader(cfg.backbone, cfg.version)
-
-    evaluator = MultiWozEvaluator(reader, args.data_type)
-
-    if cfg.task == "e2e":
-        bleu, success, match = evaluator.e2e_eval(
-            data, eval_dial_list=eval_dial_list, add_auxiliary_task=cfg.add_auxiliary_task)
-
-        score = 0.5 * (success + match) + bleu
-
-        logger.info('match: %2.2f; success: %2.2f; bleu: %2.2f; score: %.2f',
-            match, success, bleu, score)
-    else:
-        joint_goal, f1, accuracy, _, _ = evaluator.dialog_state_tracking_eval(
-            data, eval_dial_list=eval_dial_list, add_auxiliary_task=cfg.add_auxiliary_task)
-
-        logger.info('joint acc: %2.2f; acc: %2.2f; f1: %2.2f;',
-            joint_goal, accuracy, f1)

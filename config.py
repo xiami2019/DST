@@ -13,10 +13,10 @@ def add_config(parser):
     define arguments
     '''
     group = parser.add_argument_group("Construction")
-    group.add_argument('-backbone', type=str, default='fnlp/cpt-base',
+    group.add_argument('-backbone', type=str, default='facebook/mbart-large-50',
                         choices=['fnlp/cpt-base', 'fnlp/cpt-large', 
                                 'fnlp/bart-base-chinese', 'fnlp/bart-large-chinese',
-                                'mymusise/CPM-GPT2-FP16', 'mymusise/gpt2-medium-chinese'])
+                                'facebook/mbart-large-50'])
     group.add_argument('-context_size', type=int, default=-1)
     group.add_argument('-ururu', action='store_true')
     group.add_argument("-task", type=str, default="dst",

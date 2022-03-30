@@ -9,7 +9,7 @@ from abc import ABCMeta, abstractmethod
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
 from torch.nn.utils.rnn import pad_sequence
-from transformers import AdamW, get_linear_schedule_with_warmup, get_constant_schedule, BartForConditionalGeneration, TFGPT2LMHeadModel
+from transformers import AdamW, get_linear_schedule_with_warmup, get_constant_schedule, BartForConditionalGeneration, MBartForConditionalGeneration
 from modeling_cpt import CPTForConditionalGeneration
 from reader import CrossWOZReader, CrossWOZIterator
 from evaluator import CrossWOZEvaluator
@@ -159,8 +159,8 @@ class BaseRunner(metaclass=ABCMeta):
             model = CPTForConditionalGeneration.from_pretrained(model_path)
         elif self.cfg.backbone in ['fnlp/bart-base-chinese', 'fnlp/bart-large-chinese']:
             model = BartForConditionalGeneration.from_pretrained(model_path)
-        elif self.cfg.backbone in ['mymusise/CPM-GPT2-FP16', 'mymusise/gpt2-medium-chinese']:
-            model = TFGPT2LMHeadModel.from_pretrained(model_path)
+        elif self.cfg.backbone in ['facebook/mbart-large-50']:
+            model = MBartForConditionalGeneration.from_pretrained(model_path)
         else:
             raise NotImplementedError
         
@@ -315,18 +315,29 @@ class CrossWOZRunner(BaseRunner):
         optimizer, scheduler = self.get_optimizer_and_scheduler(num_training_steps_per_epoch, self.cfg.batch_size)
         reporter = Reporter(self.cfg.log_frequency, self.cfg.model_dir)
 
+        best_joint_acc = 0
+        best_epoch = 0
         for epoch in range(1, self.cfg.epochs + 1):
             train_iterator = self.iterator.get_data_iterator(
                 train_batches, self.cfg.task, self.cfg.ururu, self.cfg.context_size
             )
 
-            self.train_epoch(train_iterator, optimizer, scheduler, num_training_steps_per_epoch, reporter)
+            # self.train_epoch(train_iterator, optimizer, scheduler, num_training_steps_per_epoch, reporter)
 
             logger.info('done {}/{} epoch'.format(epoch, self.cfg.epochs))
 
             self.save_model(epoch)
 
             self.validation(reporter.global_step)
+
+            if epoch > 10:
+                # 第十个epoch之后才会测试，节省时间
+                metric_results = self.predict()
+                if metric_results["all"]["joint acc"] > best_joint_acc:
+                    best_joint_acc = metric_results["all"]["joint acc"]
+                    best_epoch = epoch
+                logger.info('[Test] Best joint acc is: {}; at {} epoch'.format(best_joint_acc, best_epoch))
+
 
     def validation(self, global_step):
         self.model.eval()
@@ -360,7 +371,7 @@ class CrossWOZRunner(BaseRunner):
         batch_decoded = []
         for i, belief_output in enumerate(belief_outputs):
             if belief_output[0] == self.reader.pad_token_id:
-                belief_outzput = belief_output[1:]
+                belief_output = belief_output[1:]
 
             if eos_token_id not in belief_output:
                 eos_idx = len(belief_output) - 1
@@ -381,8 +392,6 @@ class CrossWOZRunner(BaseRunner):
             self.cfg.pred_data_type, self.cfg.batch_size, special_domain=self.cfg.special_domain
         )
 
-        early_stopping = True if self.cfg.beam_size > 1 else False
-
         results = {}
         count = 0
         for dial_batch in tqdm(pred_batches, total=len(pred_batches), desc='Prediction'):
@@ -396,7 +405,7 @@ class CrossWOZRunner(BaseRunner):
                         dial_history[t], len(turn['user']), self.cfg.context_size
                     )
 
-                    encoder_input_ids = context + turn['user'] + [self.reader.eos_token_id]
+                    encoder_input_ids = [self.reader.cls_token_id] + context + turn['user'] + [self.reader.eos_token_id]
                     batch_encoder_input_ids.append(self.iterator.tensorize(encoder_input_ids))
 
                 batch_encoder_input_ids = pad_sequence(batch_encoder_input_ids,
@@ -413,6 +422,7 @@ class CrossWOZRunner(BaseRunner):
                         attention_mask=attention_mask,
                         eos_token_id=self.reader.eos_token_id,
                         max_length=200,
+                        num_beams=self.cfg.beam_size,
                     )
 
                 belief_outputs = belief_outputs.cpu().numpy().tolist()
@@ -424,26 +434,21 @@ class CrossWOZRunner(BaseRunner):
 
                 # update dial_history
                 for t, turn in enumerate(turn_batch):
-                    pv_text = copy.copy(turn['user'])
-
                     # use true previous belief states and ignore the db stats
                     pv_bspn = turn['bspn']
-                    
-                    # use true previous action
-                    pv_aspn = turn['aspn']
 
                     # use true previous response
                     pv_resp = turn['resp']
-
-                    if self.cfg.ururu:
-                        pv_text += pv_resp
+                    
+                    if self.cfg.use_true_bs:
+                        pv_text = pv_bspn + [self.reader.eos_token_id] + pv_resp
                     else:
-                        if self.cfg.use_true_bs:
-                            pv_text += (pv_bspn + pv_resp)
-                        else:
-                            pv_text += (belief_outputs[0][1:-1] + pv_resp)
+                        bspn = belief_outputs[t][1:]
+                        eos_index = bspn.index(self.reader.eos_token_id)
+                        bspn = bspn[:eos_index]
+                        pv_text = bspn + [self.reader.eos_token_id] + pv_resp
 
-                    dial_history[t].append(pv_text)
+                    dial_history[t] = [pv_text]
 
             result = self.iterator.get_readable_batch(dial_batch)
             results.update(**result)
@@ -466,9 +471,12 @@ class CrossWOZRunner(BaseRunner):
                 acc = (correct / count) * 100
                 metric_results[domain_slot] = acc
                 logger.info('{0} acc: {1:.2f}'.format(domain_slot, acc))
-            save_json(results, os.path.join(self.cfg.ckpt, 'metric_results'))
+            if self.cfg.output:
+                save_json(metric_results, os.path.join(self.cfg.ckpt, 'metric_results'))
         else:
             raise NotImplementedError
+
+        return metric_results
 
 
                     

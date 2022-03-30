@@ -8,7 +8,7 @@ from tqdm import tqdm
 from itertools import chain
 from collections import OrderedDict
 from torch.nn.utils.rnn import pad_sequence
-from transformers import BertTokenizer, PreTrainedTokenizer, XLNetTokenizer
+from transformers import BertTokenizer, PreTrainedTokenizer, MBart50Tokenizer
 
 from utils import definitions_cw
 from utils.io_utils import load_json, load_pickle, save_pickle, get_or_create_logger
@@ -111,7 +111,7 @@ class BaseIterator(object):
 
         ctx_len = sum([len(c) for c in windowed_context])
 
-        spare_len = self.reader.max_seq_len - len_postfix - 1
+        spare_len = self.reader.max_seq_len - len_postfix - 2
         while ctx_len >= spare_len:
             ctx_len -= len(windowed_context[0])
             windowed_context.pop(0)
@@ -161,10 +161,10 @@ class CrossWOZIterator(BaseIterator):
                 dial_encoder_inputs_ids = []
                 dial_beleif_label_ids = []
 
-                dial_history = []
+                last_turn = []
                 for turn in dial:
-                    context = self.flatten_dial_history(dial_history, len(turn['user']), context_size)
-                    encoder_input_ids = context + turn['user'] + [self.reader.eos_token_id]
+                    context = self.flatten_dial_history(last_turn, len(turn['user']), context_size)
+                    encoder_input_ids = [self.reader.cls_token_id] + context + turn['user'] + [self.reader.eos_token_id]
 
                     bspn = turn['bspn']
                     bspn_label = bspn
@@ -173,18 +173,7 @@ class CrossWOZIterator(BaseIterator):
                     dial_encoder_inputs_ids.append(encoder_input_ids)
                     dial_beleif_label_ids.append(belief_label_ids)
 
-                    if ururu:
-                        if task == 'dst':
-                            turn_text = turn['user'] + turn['resp']
-                        else:
-                            raise NotImplementedError
-                    else:
-                        if task == 'dst':
-                            turn_text = turn['user'] + bspn + turn['resp']
-                        else:
-                            raise NotImplementedError
-
-                    dial_history.append(turn_text)
+                    last_turn = [bspn + [self.reader.eos_token_id] + turn['resp']]
 
                 batch_encoder_input_ids.append(dial_encoder_inputs_ids)
                 batch_belief_label_ids.append(dial_beleif_label_ids)
@@ -214,7 +203,12 @@ class BaseReader(object):
         self.tokenizer = self.init_tokenizer()
         self.data_dir = self.get_data_dir()
         
-        encoded_data_path = os.path.join(self.data_dir, 'encoded_data.pkl')
+        if '/' in self.cfg.backbone:
+            _, backbone = self.cfg.backbone.split('/')
+        else:
+            backbone = self.cfg.backbone
+
+        encoded_data_path = os.path.join(self.data_dir, backbone + '_encoded_data.pkl')
         if os.path.exists(encoded_data_path):
             logger.info('Load encoded data from {}'.format(encoded_data_path))
             self.data = load_pickle(encoded_data_path)
@@ -233,13 +227,18 @@ class BaseReader(object):
 
     def init_tokenizer(self):
         if self.backbone in ['fnlp/cpt-base', 'fnlp/cpt-large', "fnlp/bart-base-chinese", 
-                        "fnlp/bart-large-chinese", 'mymusise/gpt2-medium-chinese']:
+                        "fnlp/bart-large-chinese"]:
             
             if self.cfg.ckpt is not None:
                 logger.info('Load tokenizer from {}'.format(self.cfg.ckpt))
                 return BertTokenizer.from_pretrained(self.cfg.ckpt)
 
             tokenizer = BertTokenizer.from_pretrained(self.backbone)
+        elif self.backbone in ['facebook/mbart-large-50']:
+            if self.cfg.ckpt is not None:
+                logger.info('Load tokenizer from {}'.format(self.cfg.ckpt))
+                return MBart50Tokenizer.from_pretrained(self.cfg.ckpt, src_lang='zh_CN', tgt_lang='zh_CN')
+            tokenizer = MBart50Tokenizer.from_pretrained(self.backbone, src_lang='zh_CN', tgt_lang='zh_CN')
         else:
             raise(NotImplementedError)
 
@@ -291,8 +290,16 @@ class BaseReader(object):
         return self.tokenizer.pad_token_id
 
     @property
+    def cls_token_id(self):
+        return self.tokenizer.cls_token_id
+
+    @property
+    def cls_token(self):
+        return self.tokenizer.cls_token
+
+    @property
     def eos_token(self):
-        if self.backbone in ['fnlp/cpt-base', 'fnlp/cpt-large', "fnlp/bart-base-chinese", "fnlp/bart-large-chinese", 'mymusise/gpt2-medium-chinese', 'mymusise/gpt2-medium-chinese']:
+        if self.backbone in ['fnlp/cpt-base', 'fnlp/cpt-large', "fnlp/bart-base-chinese", "fnlp/bart-large-chinese"]:
             return self.tokenizer.sep_token
         else:
             return self.tokenizer.eos_token
@@ -311,7 +318,7 @@ class BaseReader(object):
 
     @property
     def max_seq_len(self):
-        if self.backbone in ['fnlp/cpt-base', 'fnlp/cpt-large', "fnlp/bart-base-chinese", "fnlp/bart-large-chinese", 'mymusise/gpt2-medium-chinese']:
+        if self.backbone in ['fnlp/cpt-base', 'fnlp/cpt-large', "fnlp/bart-base-chinese", "fnlp/bart-large-chinese"]:
             return 512
         else:
             return self.tokenizer.model_max_length

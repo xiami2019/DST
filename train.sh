@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0 python main_cw.py -run_type train -max_to_keep_ckpt 60 -learning_rate 1e-5 -ururu -backbone facebook/mbart-large-50 -model_dir ./mbart_large_ururu_char_level_label_lr_1e-5_ep60_bs_8 -batch_size 8 -epochs 60
